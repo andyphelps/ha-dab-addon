@@ -88,6 +88,12 @@ class Config:
     settle_s: float = float(_opt("settle", "DAB_SETTLE", "3"))
     stream_probe_timeout_s: float = float(_opt("stream_probe_timeout", "DAB_STREAM_PROBE_TIMEOUT", "15"))
     welle_bin: str = os.environ.get("WELLE_CLI_BIN", "welle-cli")
+    # Optional: sync scanned stations into a Music Assistant server via its
+    # builtin/add_radio API command (no MA provider plugin needed -- MA has
+    # no external-provider loading mechanism, so this is the durable path
+    # that survives MA updates). Leave ma_url empty to disable syncing.
+    ma_url: str = field(default_factory=lambda: _opt("ma_url", "MA_URL"))
+    ma_token: str = field(default_factory=lambda: _opt("ma_token", "MA_TOKEN"))
 
 
 CFG = Config()
@@ -226,6 +232,49 @@ def probe_stream(sid: str, timeout: float) -> bool:
         return False
 
 
+def sync_stations_to_music_assistant(results: Dict[str, dict]) -> None:
+    """Push scanned stations into a Music Assistant server via its builtin
+    provider's add_radio API command. This is the durable path -- MA has no
+    external-provider loading mechanism (equivalent to Home Assistant's
+    custom_components), so a dedicated DAB Radio provider would need to be
+    merged upstream into music-assistant/server to be usable. add_radio is
+    an officially registered API command that survives MA updates.
+
+    Idempotent: add_radio dedupes on the station's stream_url (stable as
+    long as public_base_url and the station's sid don't change), so calling
+    this after every scan just refreshes existing entries rather than
+    piling up duplicates.
+    """
+    if not CFG.ma_url:
+        return
+
+    stations = [st for ch_data in results.values() for st in ch_data.get("stations", [])]
+    if not stations:
+        return
+
+    headers = {"Authorization": f"Bearer {CFG.ma_token}", "Content-Type": "application/json"}
+    ok = 0
+    for st in stations:
+        try:
+            resp = requests.post(
+                f"{CFG.ma_url}/api",
+                headers=headers,
+                json={
+                    "command": "builtin/add_radio",
+                    "args": {"url": st["stream_url"], "name": st["label"]},
+                },
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                ok += 1
+            else:
+                log.warning("Music Assistant add_radio for %r failed: %s %s", st["label"], resp.status_code, resp.text[:200])
+        except requests.RequestException as e:
+            log.warning("Music Assistant add_radio for %r failed: %s", st["label"], e)
+
+    log.info("Synced %d/%d station(s) to Music Assistant", ok, len(stations))
+
+
 # ---------------------------------------------------------------------------
 # Station cache, built by scanning CFG.channels one at a time
 # ---------------------------------------------------------------------------
@@ -284,6 +333,8 @@ def scan_all() -> None:
         with store_lock:
             station_cache.clear()
             station_cache.update(results)
+
+        sync_stations_to_music_assistant(results)
 
         if CFG.channels:
             current_channel = CFG.channels[-1]

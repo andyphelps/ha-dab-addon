@@ -104,6 +104,37 @@ chicken-and-egg for getting *any* files onto HAOS.)
 | `channels`             | `10B,11A,11D,12B`       | Channels the controller scans, in order                               |
 | `public_base_url`     | `http://192.168.1.60:8080` | **Required.** The add-on's own LAN-reachable address. Station stream URLs are built from this, and they're handed to real playback devices (Chromecast, Sonos, the frontend) -- those fetch the URL themselves, on the LAN, not through Home Assistant. Whatever the HAOS VM's LAN-visible IP and the add-on's published port 8080 resolve to, from your other devices' point of view. |
 | `gain`                | `22`                    | RTL-SDR tuner gain, passed straight through to welle-cli's `-g`. Defaults to `22` -- **auto-gain (`-1`) never held sync at all** on the dongle this was tested with (FC0013 tuner; `ofdm-processor: SyncOnPhase failed`, repeating forever), `22` is the manual value confirmed working after repositioning the antenna. If you swap dongles/antenna/location, re-verify with a manual `welle-cli -F rtl_tcp,<host>:<port> -c <channel> -g <value> -w 8080` run and watch `/mux.json` rather than trusting this default blindly. |
+| `ma_url`              | `http://localhost:8095` | Optional. Base URL of a Music Assistant server. When set, every scan syncs all discovered stations into MA's library via its `builtin/add_radio` API command -- see "Music Assistant integration" below. Leave empty to disable. |
+| `ma_token`            | *(a JWT)*               | Optional. A Music Assistant long-lived API token with `library.write` scope (create one in the MA web UI, under your user profile -- not your account password). Required if `ma_url` is set. |
+
+## Music Assistant integration
+
+If you already run [Music Assistant](https://www.music-assistant.io/), that's
+a nicer front end than the `dab_radio` media_player/media_source on its own --
+one unified library across DAB and every other source, proper multi-room
+grouping, and a wider range of player types (its AirPlay implementation is
+separate from Home Assistant's `apple_tv` integration, so it isn't affected
+by the pyatv bug above).
+
+Music Assistant has **no external-provider loading mechanism** (nothing
+equivalent to Home Assistant's `custom_components` folder -- providers load
+only from inside its own installed package, confirmed by reading its actual
+source). A dedicated "DAB Radio" provider would have to be merged upstream
+into `music-assistant/server` to be usable, with no guaranteed timeline. So
+rather than build a provider, `controller.py` syncs stations into MA's
+existing generic **`builtin`** provider after every scan, via its officially
+registered `builtin/add_radio` API command (`POST {ma_url}/api` with
+`{"command": "builtin/add_radio", "args": {"url": ..., "name": ...}}` and a
+Bearer token) -- no plugin code, and it survives MA updates since it's a
+stable, documented command (see `http://<ma-host>:8095/api-docs/commands`).
+Dedup is by stream URL, so re-syncing on every scan just refreshes existing
+entries rather than piling up duplicates.
+
+To set it up: create a long-lived token in the MA web UI (your user profile,
+not an admin password), set `ma_url` (e.g. `http://localhost:8095` if MA
+runs on the same HAOS host) and `ma_token` in this add-on's options, then
+run a scan -- stations should appear in MA's library as Radio items shortly
+after.
 
 Note the default output codec is **MP3**, not FLAC -- there's no PCM
 decode step in this design (unlike the Pi/FIFO version), so the codec just

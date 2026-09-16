@@ -1,5 +1,5 @@
 name: DAB Radio
-version: "0.1.0"
+version: "0.2.0"
 slug: dab_radio
 description: >-
   welle-cli DAB/DAB+ receiver tuned via a remote rtl_tcp source (the RTL-SDR
@@ -32,3 +32,5 @@ schema:
   channels: str
   public_base_url: str
   gain: str
+  ma_url: "str?"
+  ma_token: "password?"
