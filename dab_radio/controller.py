@@ -232,7 +232,7 @@ def probe_stream(sid: str, timeout: float) -> bool:
         return False
 
 
-def sync_stations_to_music_assistant(results: Dict[str, dict]) -> None:
+def sync_stations_to_music_assistant(stations: List[dict]) -> None:
     """Push scanned stations into a Music Assistant server via its builtin
     provider's add_radio API command. This is the durable path -- MA has no
     external-provider loading mechanism (equivalent to Home Assistant's
@@ -240,16 +240,17 @@ def sync_stations_to_music_assistant(results: Dict[str, dict]) -> None:
     merged upstream into music-assistant/server to be usable. add_radio is
     an officially registered API command that survives MA updates.
 
+    MUST be called while welle-cli is tuned to these stations' channel --
+    add_radio validates each URL live via ffprobe (to fetch codec/format
+    info), which 404s against any station not on the currently-tuned
+    channel. Caller is responsible for syncing per-channel, during the scan.
+
     Idempotent: add_radio dedupes on the station's stream_url (stable as
     long as public_base_url and the station's sid don't change), so calling
-    this after every scan just refreshes existing entries rather than
-    piling up duplicates.
+    this on every scan just refreshes existing entries rather than piling
+    up duplicates.
     """
-    if not CFG.ma_url:
-        return
-
-    stations = [st for ch_data in results.values() for st in ch_data.get("stations", [])]
-    if not stations:
+    if not CFG.ma_url or not stations:
         return
 
     headers = {"Authorization": f"Bearer {CFG.ma_token}", "Content-Type": "application/json"}
@@ -272,7 +273,7 @@ def sync_stations_to_music_assistant(results: Dict[str, dict]) -> None:
         except requests.RequestException as e:
             log.warning("Music Assistant add_radio for %r failed: %s", st["label"], e)
 
-    log.info("Synced %d/%d station(s) to Music Assistant", ok, len(stations))
+    log.info("Synced %d/%d station(s) on channel %s to Music Assistant", ok, len(stations), stations[0]["channel"])
 
 
 # ---------------------------------------------------------------------------
@@ -330,11 +331,16 @@ def scan_all() -> None:
             log.info("Channel %s: ensemble=%r, %d station(s) with audio", ch, ensemble_label, len(stations))
             results[ch] = {"ensemble": ensemble_label, "scanned_at": time.time(), "stations": stations}
 
+            # Sync THIS channel's stations to MA now, while welle-cli is still
+            # tuned to it -- MA's add_radio validates each URL live via
+            # ffprobe, which 404s for any station not on the currently-tuned
+            # channel. Batching this at the end (after moving on to the last
+            # channel) would only ever succeed for that last channel.
+            sync_stations_to_music_assistant(stations)
+
         with store_lock:
             station_cache.clear()
             station_cache.update(results)
-
-        sync_stations_to_music_assistant(results)
 
         if CFG.channels:
             current_channel = CFG.channels[-1]
