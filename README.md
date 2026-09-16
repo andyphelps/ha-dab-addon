@@ -4,6 +4,33 @@ A Home Assistant Add-on that runs `welle-cli` against a **remote** RTL-SDR
 dongle (via `rtl_tcp`) and exposes a small REST API for station listing and
 tuning. Pairs with the `dab_radio` custom component in `../ha-dab-integration/`.
 
+Confirmed working end-to-end against a real HAOS instance: rtl_tcp over the
+network held sync, the controller scanned real stations, and audio played
+successfully on a Chromecast via the `dab_radio` media_source.
+
+## Known issues
+
+- **AirPlay/HomePod (via the `apple_tv` integration) does not work**, and it's
+  not fixable on our side. It's a confirmed upstream bug in `pyatv`'s RAOP
+  streaming code: a buffer-position race in `PatchedIceCastClient` that
+  deadlocks specifically when `miniaudio` resolves to 1.71 (which is what
+  happens on Python 3.14, i.e. current HAOS) -- see
+  [postlund/pyatv#2850](https://github.com/postlund/pyatv/pull/2850) (open,
+  not yet merged) and
+  [home-assistant/core#125565](https://github.com/home-assistant/core/issues/125565).
+  Verified directly: calling pyatv's own `InternetSource`/`readframes()`
+  against welle-cli's stream in isolation works fine, so this isn't about
+  anything specific to our audio -- it's pyatv's internal buffering. Will
+  presumably start working once pyatv ships a fix and Home Assistant Core
+  bumps its pinned version.
+- **`public_base_url` must be reachable from the actual playback device**,
+  not just from Home Assistant -- this bit us for real: a Chromecast on a
+  different subnet/VLAN than the add-on failed with "Failed to cast media...
+  Please make sure the URL is reachable" and never even completed a TCP
+  connection to the add-on (visible as: no second sender ever registered in
+  the add-on's log, only the controller's own `/tune` probe). Moving the
+  Chromecast onto the same subnet as the add-on fixed it immediately.
+
 ## Topology
 
 ```
